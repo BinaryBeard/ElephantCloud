@@ -8,7 +8,7 @@ exports.handler = async (event) => {
         case 'start':
             return handleStartEvent(event.testID, event.screenCount)
         case 'answer':
-            return handleAnswerEvent(event.screenCount, event.answerID)
+            return handleAnswerEvent(event.testID, event.screenCount, event.imageIDs, event.answerID)
         case 'stop':
             return handleStopEvent(event.screenCount)
     }
@@ -40,13 +40,8 @@ function handleSetupEvent(screenCount, imageIDs, elephantName) {
                     goodResponses = goodResponses && response
                 })
                 if (goodResponses) {
-                    createTestSetupRecord(testID, elephantName, screenCount, imageIDs)
-                    const resolution = {
-                        statusCode: '200',
-                        screenCount, elephantName, test_id: testID,
-                        timestamp: new Date().toISOString(),
-                        message: 'Setup Complete!'
-                    }
+                    const resolution = createTestSetupRecord(testID, elephantName, screenCount, imageIDs)
+                    resolution.statusCode = '200'
                     resolve(resolution)
                 }
                 else {
@@ -84,13 +79,8 @@ function handleStartEvent(testID, screenCount) {
                     goodResponses = goodResponses && response
                 })
                 if (goodResponses) {
-                    createTestStartRecord(testID)
-                    const resolution = {
-                        statusCode: '200',
-                        screenCount, test_id: testID,
-                        timestamp: new Date().toISOString(),
-                        message: 'Test Started'
-                    }
+                    const resolution = createTestStartRecord(testID)
+                    resolution.statusCode = '200'
                     resolve(resolution)
                 }
                 else {
@@ -110,7 +100,45 @@ function handleStartEvent(testID, screenCount) {
                 }
                 reject(resolution)
             })
+    })
+}
 
+function handleAnswerEvent(testID, screenCount, imageIDs, answerInt) {
+    return new Promise((resolve, reject) => {
+        const promiseArr = []
+        for (i = 0; i < screenCount; i++) {
+            const payload = { ledState: (answerInt === i + 1) ? 1 : 0, activateIR: false, screens: [] }
+            promiseArr.push(sendPayloadToThing(`ElephantScreen${i + 1}`, payload))
+        }
+
+        return Promise.all(promiseArr)
+            .then((responses) => {
+                let goodResponses = true
+                responses.forEach((response) => {
+                    goodResponses = goodResponses && response
+                })
+                if (goodResponses) {
+                    const resolution = createAnswerSetRecord(testID, imageIDs, answerInt)
+                    resolution.statusCode = '200'
+                    resolve(resolution)
+                }
+                else {
+                    const resolution = {
+                        status: '400',
+                        timestamp: new Date().toISOString(),
+                        message: 'Issue sending payload to screens'
+                    }
+                    reject(resolution)
+                }
+            })
+            .catch((err) => {
+                const resolution = {
+                    status: '500',
+                    timestamp: new Date().toISOString(),
+                    message: err.message
+                }
+                reject(resolution)
+            })
     })
 }
 
@@ -152,6 +180,7 @@ function createTestSetupRecord(testID, elephantName, screenCount, imageIDs) {
 
     console.log('STORING TEST SETUP RECORD')
     console.log(JSON.stringify(dataToStore, null, 4))
+    return dataToStore
 }
 
 function createTestStartRecord(testID) {
@@ -163,6 +192,7 @@ function createTestStartRecord(testID) {
 
     console.log('STORING TEST START RECORD')
     console.log(JSON.stringify(dataToStore, null, 4))
+    return dataToStore
 }
 
 function createAnswerSetRecord(testID, imageIDs, selectedInt) {
@@ -184,6 +214,7 @@ function createAnswerSetRecord(testID, imageIDs, selectedInt) {
 
     console.log('STORING ANSWER RECORD')
     console.log(JSON.stringify(dataToStore, null, 4))
+    return dataToStore
 }
 
 function finishTestRecord(testID) {
@@ -195,6 +226,7 @@ function finishTestRecord(testID) {
     }
     console.log('STORING TEST END RECORD')
     console.log(JSON.stringify(dataToStore, null, 4))
+    return dataToStore
 }
 
 function guid() {
