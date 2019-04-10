@@ -10,7 +10,7 @@ exports.handler = async (event) => {
         case 'answer':
             return handleAnswerEvent(event.testID, event.screenCount, event.imageIDs, event.answerID)
         case 'stop':
-            return handleStopEvent(event.screenCount)
+            return handleStopEvent(event.testID, event.screenCount)
     }
 }
 
@@ -142,6 +142,52 @@ function handleAnswerEvent(testID, screenCount, imageIDs, answerInt) {
     })
 }
 
+function handleStopEvent(testID, screenCount) {
+    return new Promise((resolve, reject) => {
+        const promiseArr = []
+        for (i = 0; i < screenCount; i++) {
+            const payload = {
+                testID: '',
+                imageID: 0,
+                activateIR: false,
+                ledState: 0,
+                feederDuration: 0,
+                screens: [],
+            }
+            promiseArr.push(sendPayloadToThing(`ElephantScreen${i + 1}`, payload))
+        }
+
+        return Promise.all(promiseArr)
+            .then((responses) => {
+                let goodResponses = true
+                responses.forEach((response) => {
+                    goodResponses = goodResponses && response
+                })
+                if (goodResponses) {
+                    const resolution = createStopRecord(testID)
+                    resolution.statusCode = '200'
+                    resolve(resolution)
+                }
+                else {
+                    const resolution = {
+                        status: '400',
+                        timestamp: new Date().toISOString(),
+                        message: 'Issue sending payload to screens'
+                    }
+                    reject(resolution)
+                }
+            })
+            .catch((err) => {
+                const resolution = {
+                    status: '500',
+                    timestamp: new Date().toISOString(),
+                    message: err.message
+                }
+                reject(resolution)
+            })
+    })
+}
+
 function shuffleArr(array) {
     let currentIndex = array.length, temporaryValue, randomIndex
     while (0 !== currentIndex) {
@@ -217,12 +263,12 @@ function createAnswerSetRecord(testID, imageIDs, selectedInt) {
     return dataToStore
 }
 
-function finishTestRecord(testID) {
+function createStopRecord(testID) {
     const isoDate = new Date().toISOString()
     const dataToStore = {
         test_id: testID,
         creation_date: new Date().toISOString(),
-        type: 'end'
+        type: 'stop'
     }
     console.log('STORING TEST END RECORD')
     console.log(JSON.stringify(dataToStore, null, 4))
