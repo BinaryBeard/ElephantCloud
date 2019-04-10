@@ -1,0 +1,207 @@
+const AWS = require('aws-sdk')
+const iotData = new AWS.IotData({ endpoint: 'a2638bvz51i7pu-ats.iot.us-east-1.amazonaws.com' })
+
+exports.handler = async (event) => {
+    switch (event.type) {
+        case 'setup':
+            return handleSetupEvent(event.screenCount, event.imageIDs, event.elephantName)
+        case 'start':
+            return handleStartEvent(event.testID, event.screenCount)
+        case 'answer':
+            return handleAnswerEvent(event.screenCount, event.answerID)
+        case 'stop':
+            return handleStopEvent(event.screenCount)
+    }
+}
+
+function handleSetupEvent(screenCount, imageIDs, elephantName) {
+    return new Promise((resolve, reject) => {
+        if (screenCount !== imageIDs.length) {
+            const resolution = {
+                status: '400',
+                timestamp: new Date().toISOString(),
+                message: 'Screen count does not match imageIDs'
+            }
+            reject(resolution)
+        }
+        const testID = guid()
+
+        shuffleArr(imageIDs)
+        const promiseArr = []
+        for (i = 0; i < screenCount; i++) {
+            const payload = { testID, imageID: imageIDs[i], screens: imageIDs }
+            promiseArr.push(sendPayloadToThing(`ElephantScreen${i + 1}`, payload))
+        }
+
+        return Promise.all(promiseArr)
+            .then((responses) => {
+                let goodResponses = true
+                responses.forEach((response) => {
+                    goodResponses = goodResponses && response
+                })
+                if (goodResponses) {
+                    createTestSetupRecord(testID, elephantName, screenCount, imageIDs)
+                    const resolution = {
+                        statusCode: '200',
+                        screenCount, elephantName, test_id: testID,
+                        timestamp: new Date().toISOString(),
+                        message: 'Setup Complete!'
+                    }
+                    resolve(resolution)
+                }
+                else {
+                    const resolution = {
+                        status: '400',
+                        timestamp: new Date().toISOString(),
+                        message: 'Issue sending payload to screens'
+                    }
+                    reject(resolution)
+                }
+            })
+            .catch((err) => {
+                const resolution = {
+                    status: '500',
+                    timestamp: new Date().toISOString(),
+                    message: err.message
+                }
+                reject(resolution)
+            })
+    })
+}
+
+function handleStartEvent(testID, screenCount) {
+    return new Promise((resolve, reject) => {
+        const promiseArr = []
+        for (i = 0; i < screenCount; i++) {
+            const payload = { ledState: 2, activateIR: true }
+            promiseArr.push(sendPayloadToThing(`ElephantScreen${i + 1}`, payload))
+        }
+
+        return Promise.all(promiseArr)
+            .then((responses) => {
+                let goodResponses = true
+                responses.forEach((response) => {
+                    goodResponses = goodResponses && response
+                })
+                if (goodResponses) {
+                    createTestStartRecord(testID)
+                    const resolution = {
+                        statusCode: '200',
+                        screenCount, test_id: testID,
+                        timestamp: new Date().toISOString(),
+                        message: 'Test Started'
+                    }
+                    resolve(resolution)
+                }
+                else {
+                    const resolution = {
+                        status: '400',
+                        timestamp: new Date().toISOString(),
+                        message: 'Issue sending payload to screens'
+                    }
+                    reject(resolution)
+                }
+            })
+            .catch((err) => {
+                const resolution = {
+                    status: '500',
+                    timestamp: new Date().toISOString(),
+                    message: err.message
+                }
+                reject(resolution)
+            })
+
+    })
+}
+
+function shuffleArr(array) {
+    let currentIndex = array.length, temporaryValue, randomIndex
+    while (0 !== currentIndex) {
+      randomIndex = Math.floor(Math.random() * currentIndex)
+      currentIndex -= 1
+      temporaryValue = array[currentIndex]
+      array[currentIndex] = array[randomIndex]
+      array[randomIndex] = temporaryValue
+    }
+    return array
+}
+
+function sendPayloadToThing(thingName, desired) {
+    const params = {
+        thingName: thingName,
+        payload: JSON.stringify({ state: { desired } })
+    }
+    return iotData.updateThingShadow(params).promise()
+        .then((data) => {
+            return true
+        })
+        .catch((err) => {
+            return false
+        })
+}
+
+function createTestSetupRecord(testID, elephantName, screenCount, imageIDs) {
+    const dataToStore = {
+        test_id: testID,
+        creation_date: new Date().toISOString(),
+        elephant_name: elephantName,
+        screen_count: screenCount,
+        image_references: imageIDs,
+        type: 'setup'
+    }
+
+    console.log('STORING TEST SETUP RECORD')
+    console.log(JSON.stringify(dataToStore, null, 4))
+}
+
+function createTestStartRecord(testID) {
+    const dataToStore = {
+        test_id: testID,
+        creation_date: new Date().toISOString(),
+        type: 'start'
+    }
+
+    console.log('STORING TEST START RECORD')
+    console.log(JSON.stringify(dataToStore, null, 4))
+}
+
+function createAnswerSetRecord(testID, imageIDs, selectedInt) {
+    const dataToStore = {
+        test_id: testID,
+        creation_date: new Date().toISOString(),
+        type: 'answer',
+        screens: []
+    }
+
+    for (i = 0; i < 3; i++) {
+        const screenData = {
+            id: i + 1,
+            image: imageIDs[i],
+            selected: i + 1 === selectedInt
+        }
+        dataToStore.screens.push(screenData)
+    }
+
+    console.log('STORING ANSWER RECORD')
+    console.log(JSON.stringify(dataToStore, null, 4))
+}
+
+function finishTestRecord(testID) {
+    const isoDate = new Date().toISOString()
+    const dataToStore = {
+        test_id: testID,
+        creation_date: new Date().toISOString(),
+        type: 'end'
+    }
+    console.log('STORING TEST END RECORD')
+    console.log(JSON.stringify(dataToStore, null, 4))
+}
+
+function guid() {
+    function s4() {
+        return Math.floor((1 + Math.random()) * 0x10000)
+            .toString(16)
+            .substring(1)
+    }
+    return `${s4()}${s4()}-${s4()}-${s4()}-${s4()}-${s4()}${s4()}${s4()}`
+}
