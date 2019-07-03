@@ -1,4 +1,5 @@
 const AWS = require('aws-sdk')
+const lambda = new AWS.Lambda()
 const iotData = new AWS.IotData({ endpoint: 'a2638bvz51i7pu-ats.iot.us-east-1.amazonaws.com' })
 
 exports.handler = async (event) => {
@@ -11,6 +12,8 @@ exports.handler = async (event) => {
             return handleStartEvent(body.testID, body.screenCount)
         case '/answer':
             return handleAnswerEvent(body.testID, body.screenCount, body.imageIDs, body.answerID)
+        case '/reset':
+            return handleResetEvent(body.testID, body.screenCount, body.imageIDs)
         case '/stop':
             return handleStopEvent(body.testID, body.screenCount)
     }
@@ -27,7 +30,7 @@ function handleSetupEvent(screenCount, imageIDs, elephantName) {
         shuffleArr(imageIDs)
         const promiseArr = []
         for (let i = 0; i < screenCount; i++) {
-            const payload = { testID, imageID: imageIDs[i], screens: imageIDs }
+            const payload = { testID, imageID: imageIDs[i], screens: imageIDs, ledState: 0, feederDuration: 0, activateIR: false }
             promiseArr.push(sendPayloadToThing(`ElephantScreen${i + 1}`, payload))
         }
 
@@ -85,7 +88,7 @@ function handleAnswerEvent(testID, screenCount, imageIDs, answerInt) {
     return new Promise((resolve, reject) => {
         const promiseArr = []
         for (let i = 0; i < screenCount; i++) {
-            const payload = { ledState: (answerInt === i + 1) ? 1 : 0, activateIR: false, screens: [] }
+            const payload = { ledState: (answerInt === i + 1) ? 1 : 0, activateIR: false, screens: [], feederDuration: (answerInt === i + 1) ? 5 : 0 }
             promiseArr.push(sendPayloadToThing(`ElephantScreen${i + 1}`, payload))
         }
 
@@ -96,17 +99,73 @@ function handleAnswerEvent(testID, screenCount, imageIDs, answerInt) {
                     goodResponses = goodResponses && response
                 })
                 if (goodResponses) {
-                    const body = createAnswerSetRecord(testID, imageIDs, answerInt)
-                    resolve(buildResponse(200, body))
+                    return invokeReset(testID, screenCount, imageIDs)
                 }
                 else {
                     const message = 'Issue sending payload to screens'
                     reject(buildResponse(400, { message }))
                 }
             })
+            .then((invokeResponse) => {
+                const body = createAnswerSetRecord(testID, imageIDs, answerInt)
+                resolve(buildResponse(200, body))
+            })
             .catch((err) => {
                 reject(buildResponse(500, { message: err.message }))
             })
+    })
+}
+
+function invokeReset(testID, screenCount, imageIDs) {
+    const body = { testID, screenCount, imageIDs }
+    const params = {
+        FunctionName: 'ElephantFunction',
+        InvocationType: 'Event',
+        Payload: JSON.stringify({
+            resource: '/reset',
+            path: '/reset',
+            body: JSON.stringify(body),
+        })
+    }
+    return lambda.invoke(params).promise()
+}
+
+function handleResetEvent(testID, screenCount, imageIDs) {
+    return new Promise((resolve, reject) => {
+        console.log('Wating 10 seconds before firing this function')
+        setTimeout(() => {
+            if (screenCount !== imageIDs.length) {
+                const message = 'Screen count does not match imageIDs'
+                reject(buildResponse(400, { message }))
+            }
+
+            shuffleArr(imageIDs)
+            const promiseArr = []
+            for (let i = 0; i < screenCount; i++) {
+                const payload = { testID, imageID: imageIDs[i], screens: imageIDs, ledState: 0, feederDuration: 0, activateIR: false }
+                promiseArr.push(sendPayloadToThing(`ElephantScreen${i + 1}`, payload))
+            }
+
+            return Promise.all(promiseArr)
+                .then((responses) => {
+                    let goodResponses = true
+                    responses.forEach((response) => {
+                        goodResponses = goodResponses && response
+                    })
+                    if (goodResponses) {
+                        const body = createTestResetRecord(testID, screenCount, imageIDs)
+                        resolve(buildResponse(200, body))
+                    }
+                    else {
+                        const message = 'Issue sending payload to screens'
+                        reject(buildResponse(400, { message }))
+                    }
+                })
+                .catch((err) => {
+                    reject(buildResponse(500, { message: err.message }))
+                })
+
+        }, 10000)
     })
 }
 
@@ -183,6 +242,20 @@ function createTestSetupRecord(testID, elephantName, screenCount, imageIDs) {
     }
 
     console.log('STORING TEST SETUP RECORD')
+    console.log(JSON.stringify(dataToStore, null, 4))
+    return dataToStore
+}
+
+function createTestResetRecord(testID, elephantName, screenCount, imageIDs) {
+    const dataToStore = {
+        test_id: testID,
+        creation_date: new Date().toISOString(),
+        screen_count: screenCount,
+        image_references: imageIDs,
+        type: 'reset'
+    }
+
+    console.log('STORING TEST RESET RECORD')
     console.log(JSON.stringify(dataToStore, null, 4))
     return dataToStore
 }
